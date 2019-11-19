@@ -10,6 +10,7 @@ var fs = require("fs");
 var info = require("../package.json");
 var path = require("path");
 var program = require("commander");
+var glob = require("glob");
 
 var Terser = require("..");
 try {
@@ -42,6 +43,8 @@ program.option("-m, --mangle [options]", "Mangle names/specify mangler options."
 program.option("--mangle-props [options]", "Mangle properties/specify mangler options.", parse_js());
 program.option("-b, --beautify [options]", "Beautify output/specify output options.", parse_js());
 program.option("-o, --output <file>", "Output file (default STDOUT).");
+program.option("--out-dir <dir>", "Output directory.");
+program.option("--ignore <pattern>", "Glob pattern of files to ignore in source.");
 program.option("--comments [filter]", "Preserve copyright comments in the output.");
 program.option("--config-file <file>", "Read minify() options from JSON file.");
 program.option("-d, --define <expr>[=value]", "Global definitions.", parse_js("define"));
@@ -65,7 +68,7 @@ program.arguments("[files...]").parseArgv(process.argv);
 if (program.configFile) {
     options = JSON.parse(read_file(program.configFile));
 }
-if (!program.output && program.sourceMap && program.sourceMap.url != "inline") {
+if (!(program.output || program.outDir) && program.sourceMap && program.sourceMap.url != "inline") {
     fatal("ERROR: cannot write source map to STDOUT");
 }
 [
@@ -170,7 +173,22 @@ if (options.files && options.files.length) {
 
 if (filesList) {
     simple_glob(filesList).forEach(function(name) {
-        files[convert_path(name)] = read_file(name);
+        try {
+            files[convert_path(name)] = read_file(name);
+        } catch (err) {
+            if (err.code == "EISDIR") {
+                let pattern = `${name}/**/*.@(js|mjs|es5)`;
+                let options = {
+                    ignore: program.ignore
+                };
+                glob.sync(pattern, options).forEach(function(found_name) {
+                    let relative_name = path.relative(name, found_name);
+                    files[convert_path(relative_name)] = read_file(found_name);
+                });
+            } else {
+                throw err;
+            }
+        }
     });
     run();
 } else {
@@ -222,6 +240,27 @@ function run() {
     } catch (ex) {
         fatal(ex);
     }
+    if (program.outDir) {
+        for (const file in files) {
+            if (program.sourceMap) {
+                let basename = path.basename(file);
+                options.sourceMap = {
+                    content: read_file(path.resolve(program.args[0], `${file}.map`), ""),
+                    filename: basename,
+                    url: basename + ".map"
+                };
+            }
+            program.output = path.resolve(program.outDir, file);
+            let obj = {};
+            obj[file] = files[file];
+            generate_result(obj, options);
+        }
+    } else {
+        generate_result(files, options);
+    }
+}
+
+function generate_result(files, options) {
     var result = Terser.minify(files, options);
     if (result.error) {
         var ex = result.error;
@@ -349,6 +388,7 @@ function read_file(path, default_value) {
     try {
         return fs.readFileSync(path, "utf8");
     } catch (ex) {
+        if (ex.code == "EISDIR") throw ex;
         if ((ex.code == "ENOENT" || ex.code == "ENAMETOOLONG") && default_value != null) return default_value;
         fatal(ex);
     }
