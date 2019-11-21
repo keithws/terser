@@ -179,7 +179,7 @@ if (filesList) {
             if (err.code == "EISDIR") {
                 let pattern = `${name}/**/*.@(js|mjs|es5)`;
                 let options = {
-                    ignore: program.ignore
+                    ignore: program.ignore.split(",")
                 };
                 glob.sync(pattern, options).forEach(function(found_name) {
                     let relative_name = path.relative(name, found_name);
@@ -244,11 +244,21 @@ function run() {
         for (const file in files) {
             if (program.sourceMap) {
                 let basename = path.basename(file);
-                options.sourceMap = {
-                    content: read_file(path.resolve(program.args[0], `${file}.map`), ""),
-                    filename: basename,
-                    url: basename + ".map"
-                };
+                try  {
+                    let content = fs.readFileSync(path.resolve(program.args[0], `${file}.map`), { encoding: "utf8" });
+                    options.sourceMap = {
+                        content: content,
+                        filename: basename,
+                        url: basename + ".map"
+                    };
+                } catch (err) {
+                    if (err.code === "ENOENT") {
+                        // no such file or directory
+                        console.warn(`WARN: ${err}`);
+                    } else {
+                        throw err;
+                    }
+                }
             }
             program.output = path.resolve(program.outDir, file);
             let obj = {};
